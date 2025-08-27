@@ -1,90 +1,99 @@
 import streamlit as st
-import requests
-from datetime import datetime, timezone
-from typing import Dict, Optional
 from supabase import create_client, Client
-import datetime
 
-# ------------------------
-# Init Supabase
-# ------------------------
-@st.cache_resource
-def init_supabase():
-    """Initialize Supabase client with caching"""
+# Supabase configuration
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_ANON_KEY = st.secrets["supabase"]["anon_key"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+def initialize_auth_state():
+    """Initialize authentication-related session state variables."""
+    if "user" not in st.session_state:
+        st.session_state.user = None
+    if "access_token" not in st.session_state:
+        st.session_state.access_token = None
+
+def get_user_client():
+    """Return Supabase client authorized with current user's access token."""
+    if "access_token" not in st.session_state:
+        return None
+    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    client.postgrest.auth(st.session_state.access_token)
+    return client
+
+def login(email, password):
+    """Handle user login."""
     try:
-        SUPABASE_URL = st.secrets["supabase"]["url"]
-        SUPABASE_KEY = st.secrets["supabase"]["key"]
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        user = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": password
+        })
+        if user and user.session:
+            st.session_state.access_token = user.session.access_token
+            st.session_state.user = user.user
+        return user
     except Exception as e:
-        st.error(f"Failed to initialize Supabase: {e}")
+        st.error(f"Login failed: {e}")
         return None
 
-# ------------------------
-# WordPress Login
-# ------------------------
-def wp_login(username: str, password: str) -> Optional[Dict]:
-    """WordPress JWT authentication with user ID fetch"""
-    from utils.config import get_config
-    config = get_config()
-    
-    if not config:
-        return None
-
-    url = f"{config['wp_url']}/wp-json/jwt-auth/v1/token"
-
+def signup(email, password):
+    """Handle user signup."""
     try:
-        with st.spinner("Authenticating..."):
-            resp = requests.post(
-                url,
-                data={"username": username, "password": password},
-                timeout=10
-            )
+        user = supabase.auth.sign_up({
+            "email": email,
+            "password": password
+        })
+        if user and user.session:
+            st.session_state.access_token = user.session.access_token
+            st.session_state.user = user.user
 
-        if resp.status_code == 200:
-            token_data = resp.json()
-
-            # Fetch user details (to get WordPress user ID)
-            me_url = f"{config['wp_url']}/wp-json/wp/v2/users/me"
-            me_resp = requests.get(
-                me_url,
-                headers={"Authorization": f"Bearer {token_data['token']}"},
-                timeout=10
-            )
-
-            if me_resp.status_code == 200:
-                user_info = me_resp.json()
-                token_data["user_id"] = user_info.get("id")
-                token_data["user_email"] = user_info.get("email")
-                token_data["username"] = user_info.get("username", token_data.get("user_nicename"))
-            else:
-                st.warning(f"⚠️ Could not fetch user info: {me_resp.text}")
-
-            # Cache user session in Supabase
-            cache_user_data(token_data)
-            return token_data
-
-        else:
-            error_msg = resp.json().get('message', resp.text) if resp.text else 'Unknown error'
-            st.error(f"🚫 Login failed: {error_msg}")
-            return None
-
-    except requests.exceptions.RequestException as e:
-        st.error(f"🌐 Connection error: {e}")
+            # Initialize usage tracking
+            from utils.database import initialize_user_usage
+            initialize_user_usage(str(user.user.id), email)
+        return user
+    except Exception as e:
+        st.error(f"Signup failed: {e}")
         return None
 
-# ------------------------
-# Cache User Data
-# ------------------------
-def cache_user_data(user_data: Dict):
-    """Cache user data for session management"""
-    supabase = init_supabase()
-    if supabase and "user_id" in user_data:
-        try:
-            supabase.table("user_sessions").upsert({
-                "user_id": user_data["user_id"],
-                "last_login": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "user_data": user_data
-            }).execute()
-        except Exception as e:
-            st.warning(f"Failed to cache user data: {e}")
+def logout():
+    """Handle user logout."""
+    st.session_state.user = None
+    st.session_state.access_token = None
+    st.success("Logged out successfully!")
+    st.rerun()
 
+def show_auth_page():
+    """Display authentication page with login/signup tabs."""
+    st.subheader("🔐 Please sign in to continue")
+    
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+
+    with tab1:
+        with st.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            login_button = st.form_submit_button("Login")
+            
+            if login_button and email and password:
+                user = login(email, password)
+                if user:
+                    st.success("Logged in successfully!")
+                    st.rerun()
+
+    with tab2:
+        with st.form("signup_form"):
+            email = st.text_input("Email", key="signup_email")
+            password = st.text_input("Password", type="password", key="signup_password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+            signup_button = st.form_submit_button("Sign Up")
+            
+            if signup_button and email and password:
+                if password != confirm_password:
+                    st.error("Passwords do not match!")
+                elif len(password) < 6:
+                    st.error("Password must be at least 6 characters long!")
+                else:
+                    user = signup(email, password)
+                    if user:
+                        st.success("Account created and logged in!")
+                        st.rerun()
