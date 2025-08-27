@@ -1,10 +1,26 @@
 import streamlit as st
 from typing import Dict, Optional
 from datetime import datetime
+import pandas as pd
+
+# Custom modules (you must have these)
 from utils.rentcast_api import fetch_property_data
 from utils.property_analysis import analyze_property, display_property_analysis
 from utils.property_management import save_property
 from utils.usage import log_usage, get_user_usage
+
+# ------------------------
+# Main Application
+# ------------------------
+def main():
+    st.set_page_config(page_title="Property Intelligence Portal", layout="wide")
+    st.title("🏠 Real Estate Intelligence Portal")
+
+    # Simulated user ID (replace with real user auth)
+    user_id = 1
+
+    # Display main property search interface
+    display_property_search(user_id)
 
 # ------------------------
 # Property Search
@@ -24,7 +40,7 @@ def display_property_search(user_id: int):
             full_address = st.text_input(
                 "🏠 Full Property Address",
                 value="",
-                placeholder="Enter full address with city, state, zip (e.g., 5500 Grand Lake Dr, San Antonio, TX 78244)"
+                placeholder="5500 Grand Lake Dr, San Antonio, TX 78244"
             )
         with col2:
             search_submitted = st.form_submit_button("🔍 Search", use_container_width=True)
@@ -56,10 +72,7 @@ def display_property_search(user_id: int):
                 property_data = fetch_property_data(parsed_address['address'], parsed_address['city'], parsed_address['state'])
                 
                 if property_data:
-                    log_usage(user_id, full_address, "property_search", {
-                        "full_address": full_address,
-                        "parsed": parsed_address
-                    })
+                    log_usage(user_id, full_address, "property_search", {"full_address": full_address, "parsed": parsed_address})
 
                     st.session_state['last_property_data'] = property_data
                     st.session_state['last_search_params'] = parsed_address
@@ -127,10 +140,7 @@ def display_property_actions(user_id: int, property_data: Dict, full_address: st
     with col1:
         if st.button("💾 Save Property", use_container_width=True):
             try:
-                save_property(user_id, property_data, {
-                    "full_address": full_address,
-                    "search_params": st.session_state.get('last_search_params', {})
-                })
+                save_property(user_id, property_data, {"full_address": full_address, "search_params": st.session_state.get('last_search_params', {})})
                 st.success("✅ Property saved successfully!")
                 st.rerun()
             except Exception as e:
@@ -142,6 +152,7 @@ def display_property_actions(user_id: int, property_data: Dict, full_address: st
                 report = generate_property_report(property_data, analysis)
                 filename = property_data.get('formattedAddress', 'property_report').replace(' ', '_').replace(',', '')
                 st.download_button("📥 Download Report", report, file_name=f"{filename}_report.md", mime="text/markdown")
+                log_usage(user_id, full_address, "report_generated")
             except Exception as e:
                 st.error(f"❌ Error generating report: {str(e)}")
     with col3:
@@ -149,7 +160,6 @@ def display_property_actions(user_id: int, property_data: Dict, full_address: st
             lat = property_data.get('latitude')
             lon = property_data.get('longitude')
             if lat and lon:
-                import pandas as pd
                 df = pd.DataFrame({'lat': [lat], 'lon': [lon]})
                 st.map(df, zoom=15)
             else:
@@ -190,3 +200,21 @@ def display_search_tips():
 - Try variations if not found
 """)
 
+def generate_property_report(property_data: Dict, analysis: Dict = None) -> str:
+    """Generate markdown report"""
+    report = f"# Property Report - {property_data.get('formattedAddress', 'N/A')}\n\n"
+    report += f"Generated: {datetime.now().strftime('%B %d, %Y %I:%M %p')}\n\n"
+    report += f"Property Type: {property_data.get('propertyType', 'N/A')}\n"
+    report += f"Bedrooms: {property_data.get('bedrooms', 'N/A')}, Bathrooms: {property_data.get('bathrooms', 'N/A')}\n"
+    report += f"Square Footage: {property_data.get('squareFootage', 0):,} sq ft\n"
+    report += f"Lot Size: {property_data.get('lotSize', 0):,} sq ft\n"
+    if analysis and analysis.get('investment_score'):
+        score = analysis['investment_score']
+        report += f"Investment Score: {score.get('grade', 'N/A')} ({score.get('score', 0)}/100)\nRecommendation: {score.get('recommendation', 'N/A')}\n"
+    return report
+
+# ------------------------
+# Run the app
+# ------------------------
+if __name__ == "__main__":
+    main()
