@@ -1,11 +1,22 @@
 import streamlit as st
 from supabase import create_client, Client
+from typing import Optional
 
-# Supabase configuration
+# ------------------------
+# Supabase Client
+# ------------------------
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_ANON_KEY = st.secrets["supabase"]["anon_key"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
+def init_supabase() -> Client:
+    """Initialize and return Supabase client."""
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+supabase: Client = init_supabase()
+
+# ------------------------
+# Authentication State
+# ------------------------
 def initialize_auth_state():
     """Initialize authentication-related session state variables."""
     if "user" not in st.session_state:
@@ -13,44 +24,45 @@ def initialize_auth_state():
     if "access_token" not in st.session_state:
         st.session_state.access_token = None
 
-def get_user_client():
+def get_user_client() -> Optional[Client]:
     """Return Supabase client authorized with current user's access token."""
-    if "access_token" not in st.session_state:
+    if "access_token" not in st.session_state or st.session_state.access_token is None:
         return None
-    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-    client.postgrest.auth(st.session_state.access_token)
+    client = init_supabase()
+    client.auth.session = {"access_token": st.session_state.access_token}
     return client
 
-def login(email, password):
+# ------------------------
+# Authentication Functions
+# ------------------------
+def login(email: str, password: str):
     """Handle user login."""
     try:
-        user = supabase.auth.sign_in_with_password({
-            "email": email,
-            "password": password
-        })
-        if user and user.session:
-            st.session_state.access_token = user.session.access_token
-            st.session_state.user = user.user
-        return user
+        auth = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if auth and auth.session:
+            st.session_state.access_token = auth.session.access_token
+            st.session_state.user = auth.user
+        return auth
     except Exception as e:
         st.error(f"Login failed: {e}")
         return None
 
-def signup(email, password):
+def signup(email: str, password: str):
     """Handle user signup."""
     try:
-        user = supabase.auth.sign_up({
-            "email": email,
-            "password": password
-        })
-        if user and user.session:
-            st.session_state.access_token = user.session.access_token
-            st.session_state.user = user.user
+        auth = supabase.auth.sign_up({"email": email, "password": password})
+        if auth and auth.session:
+            st.session_state.access_token = auth.session.access_token
+            st.session_state.user = auth.user
 
-            # Initialize usage tracking
-            from utils.database import initialize_user_usage
-            initialize_user_usage(str(user.user.id), email)
-        return user
+            # Initialize usage tracking (optional)
+            try:
+                from utils.database import initialize_user_usage
+                initialize_user_usage(str(auth.user.id), email)
+            except ImportError:
+                pass  # skip if database module not available
+
+        return auth
     except Exception as e:
         st.error(f"Signup failed: {e}")
         return None
@@ -62,6 +74,9 @@ def logout():
     st.success("Logged out successfully!")
     st.rerun()
 
+# ------------------------
+# Auth UI Page
+# ------------------------
 def show_auth_page():
     """Display authentication page with login/signup tabs."""
     st.subheader("🔐 Please sign in to continue")
